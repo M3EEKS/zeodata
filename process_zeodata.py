@@ -26,138 +26,86 @@ load data from zeo binary file and process
 ## ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from BinaryReader import BinaryReader
-import matplotlib.pyplot as plt
-import numpy
-import pytz
-import datetime
+import sys, os, csv, numpy
 from zeoRecord import ZeoRecord
-import sys,os
 
-def time_to_hrmins(secs):
-    # convert from floating mins to hours/mins
-    time=float(secs)/120.0
-    hrs=numpy.floor(time)
-    mins=(time - hrs)*60.0
-    return '%d:%02.0f'%(hrs,mins)
+def epochs_to_minutes(val):
+    # Zeo time stats are counts of 30-second epochs
+    return int(round(float(val) / 2.0))
 
+def export_to_oscar_csv(chosen_records, filename="zeo_data_for_oscar.csv"):
+    if not chosen_records:
+        print("No valid records found.")
+        return
 
-if len(sys.argv)<2:
-	print 'USAGE: process_zeodata.py <dat file>'
-	sys.exit(1)
-else:
-	datafile=sys.argv[1]
-	if not os.path.exists(datafile):
-		print '%s does not exist:'%datafile
-		print 'USAGE: process_zeodata.py <dat file>'
-                sys.exit(1)
-		
-IDENTIFIER_SIZE = 6
-VERSION_SIZE    = 2
-HEADER_SIZE     = IDENTIFIER_SIZE + VERSION_SIZE
-EVENTS_SAVED=4
-ASSERT_NAME_MAX = 20
-HEADBAND_IMPEDANCE_SIZE = 144
-HEADBAND_PACKETS_SIZE = 144
-HEADBAND_RSSI_SIZE = 144
-HEADBAND_STATUS_SIZE = 36
+    # Exact headers and structure from your example CSV
+    headers = [
+        'ZQ', 'Total Z', 'Time to Z', 'Time in Wake', 'Time in REM', 
+        'Time in Light', 'Time in Deep', 'Awakenings', 'Sleep Graph', 
+        'Detailed Sleep Graph', 'Start of Night', 'End of Night', 'Rise Time'
+    ]
 
-
-
-binaryReader=BinaryReader(datafile)
-
-alldata={}
-good_session=1
-record_length=[]
-hypnogram_count=[]
-start_of_night=[]
-
-ctr=0
-while good_session:
-  #print binaryReader.BytesRemaining(),'bytes remaining'
-  if  binaryReader.BytesRemaining()<1680:
-      #print ''
-      #print 'breaking: no records remaining'
-      good_session=0
-  else:
-    
-    identifier=[]
-    while not identifier:
-        # yank header
-        tmp=[]
-        for i in range(IDENTIFIER_SIZE):
-            tmp.append(binaryReader.read('char'))
-        if ''.join(tmp).find('SLEEP')>-1:
-            identifier=tmp
-            
-
-    record=ZeoRecord()
-    #print ''
-    #print 'Reading Session %d:'%int(ctr+1)
-    record.getRecordData(binaryReader)
-    # check for empty start/finish times
-    if record.start_of_night_timestamp>0 and record.end_of_night_timestamp>0 and record.base_hypnogram_count>0:
-        record.make_display_hypnogram()
-        alldata[ctr]=record
-        #record.printSummary()
-        record_length.append(record.length_of_night)
-        hypnogram_count.append(record.base_hypnogram_count)
-        start_of_night.append(record.start_of_night_timestamp)
-        ctr+=1
-    else:
-        continue
-        #print 'skipping bad record'
-        #record.printSummary()
-
-    #if not (crc in CRC16_TABLE):
-    #    print 'BAD CRC'
+    with open(filename, mode='w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(headers)
         
-#  except:
-#      good_session=0
+        for timestamp in sorted(chosen_records.keys()):
+            rec = chosen_records[timestamp]
+            
+            # Detailed Sleep Graph is space-separated integers
+            # Zeo stages: 0=Unknown, 1=Wake, 2=REM, 3=Light, 4=Deep
+            count = int(rec.base_hypnogram_count)
+            hyp_str = " ".join(map(str, rec.base_hypnogram[:count]))
+            
+            writer.writerow([
+                rec.zq_score,
+                epochs_to_minutes(rec.total_z),
+                epochs_to_minutes(rec.time_to_z),
+                epochs_to_minutes(rec.time_in_wake),
+                epochs_to_minutes(rec.time_in_rem),
+                epochs_to_minutes(rec.time_in_light),
+                epochs_to_minutes(rec.time_in_deep),
+                rec.awakenings,
+                "", # Sleep Graph (left empty in your example)
+                hyp_str,
+                rec.start_of_night,
+                rec.end_of_night,
+                rec.end_of_night # Rise Time
+            ])
+    print(f"\nSUCCESS: Created '{filename}'")
 
+# --- EXECUTION ---
+if len(sys.argv) < 2:
+    print('USAGE: python3 process_zeodata.py <ZEOLOG.DAT>')
+    sys.exit(1)
 
-# get unique nights
-unique_nights=list(set(start_of_night))
-unique_nights.sort()
+datafile = sys.argv[1]
+binaryReader = BinaryReader(datafile)
+alldata = {}
+start_timestamps = []
 
-chosen_record={}
-for u in unique_nights:
-    matching_records=[i for i in alldata.iterkeys() if alldata[i].start_of_night_timestamp==u]
-    #print u,matching_records
-    sleeplen=0
-    for r in matching_records:
-        if alldata[r].length_of_night>sleeplen:
-            sleeplen=alldata[r].length_of_night
-            chosen_record[u]=r
-            #print 'choosing',chosen_record[u]
-    
-#plt.plot(numpy.array(base_hypnogram))
-print ''
-print 'Found %d good records'%len(unique_nights)
+print("Scanning file...")
+while binaryReader.BytesRemaining() >= 1680:
+    found = False
+    while not found and binaryReader.BytesRemaining() >= 6:
+        # Python 3: Search for bytes
+        if binaryReader.read('char') == b'S':
+            if binaryReader.read('char') == b'L':
+                if binaryReader.read('char') == b'E':
+                    if binaryReader.read('char') == b'E':
+                        if binaryReader.read('char') == b'P':
+                            found = True
 
-if os.path.exists('zeodata.txt'):
-	print 'appending data to zeodata.txt'
-else:
-	print 'writing data to zeodata.txt'
-f=open('zeodata.txt','a')
+    if found:
+        # Skip the trailing space after 'SLEEP'
+        binaryReader.read('char')
+        rec = ZeoRecord()
+        try:
+            rec.getRecordData(binaryReader)
+            if rec.start_of_night_timestamp > 0:
+                alldata[rec.start_of_night_timestamp] = rec
+        except Exception:
+            continue
 
-f.write('startDate\tstartTime\twakeDate\twakeTime\tTotalZ\tZQ\tTimeInDeep\tTimeInLight\tTimeInREM\tTimeInWake\tTimeToZ\tHypnogramData\n')
-
-for u in unique_nights:
-    d=alldata[chosen_record[u]]
-    d.printSummary()
-    print ''
-    f.write('%s\t'%d.start_of_night.replace(' ','\t'))
-    f.write('%s\t'%d.end_of_night.replace(' ','\t'))
-    f.write('%s\t'%time_to_hrmins(d.total_z))
-    f.write('%d\t'%d.zq_score)
-    f.write('%s\t'%time_to_hrmins(d.time_in_deep))
-    f.write('%s\t'%time_to_hrmins(d.time_in_light))
-    f.write('%s\t'%time_to_hrmins(d.time_in_rem))
-    f.write('%s\t'%time_to_hrmins(d.time_in_wake))
-    f.write('%s\t'%time_to_hrmins(d.time_to_z))
-    for i in d.display_hypnogram:
-	    f.write('%d\t'%i)
-
-    f.write('\n')
-
-f.close()
+binaryReader.close()
+export_to_oscar_csv(alldata)
