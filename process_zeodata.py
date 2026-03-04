@@ -66,7 +66,7 @@ def export_to_oscar_csv(chosen_records, filename="zeo_data_for_oscar.csv"):
                 epochs_to_minutes(rec.time_in_light),
                 epochs_to_minutes(rec.time_in_deep),
                 rec.awakenings,
-                "", # Sleep Graph (left empty in your example)
+                "", # Sleep Graph
                 hyp_str,
                 rec.start_of_night,
                 rec.end_of_night,
