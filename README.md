@@ -1,7 +1,7 @@
 zeodata
 =======
 
-code to parse zeo data files
+fork of Russell Poldrack's code to parse zeo data file for python3 compatability
 
 USAGE: process_zeodata.py ZEOSLEEP.DAT
 
